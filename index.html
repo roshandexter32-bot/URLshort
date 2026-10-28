@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>URL Shortener | DSA Micro Project</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef3f7;--panel:#fff;--ink:#0f2a43;--muted:#5b7186;--line:#d3dde6;--accent:#0b6e99;--danger:#c8442a}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1b2a;--panel:#14283c;--ink:#e6eef5;--muted:#8fa6ba;--line:#26405a;--accent:#4cb3df;--danger:#ff7a5c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 20px 64px}
+h1{font-size:2rem;margin:0 0 4px;letter-spacing:-.02em}
+.sub{color:var(--muted);margin:0 0 28px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:20px;margin-bottom:16px}
+h2{font-size:1.05rem;margin:0 0 12px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+input{flex:1;min-width:140px;padding:10px 12px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--ink);font:inherit}
+input:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button{padding:10px 16px;border:0;border-radius:4px;background:var(--accent);color:#fff;font:inherit;font-weight:500;cursor:pointer}
+button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+button.warn{background:var(--danger)}
+.out{margin-top:12px;font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+.err{color:var(--danger)}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);word-break:break-all}
+th{color:var(--muted);font-weight:500}
+.mono{font-family:ui-monospace,Menlo,monospace}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:700px){.grid{grid-template-columns:1fr}}
+.tag{display:inline-block;color:var(--muted);font-size:.8rem}
+pre{margin:0;white-space:pre-wrap;font-size:.88rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>URL Shortener</h1>
+  <p class="sub">Hash table, LRU cache, queue, stack, linked list, trie and graph, all built from scratch, backed by Supabase.</p>
+
+  <section>
+    <h2>Shorten a link</h2>
+    <div class="row"><input id="url" placeholder="https://example.com/a/very/long/link"></div>
+    <div class="row" style="margin-top:10px">
+      <input id="alias" placeholder="Custom alias (optional)">
+      <input id="ttl" type="number" min="1" placeholder="Expires in seconds (optional)">
+      <button id="go">Shorten</button>
+      <button id="undo" class="warn">Undo last</button>
+    </div>
+    <div class="out" id="result" aria-live="polite"></div>
+  </section>
+
+  <div class="grid">
+    <section>
+      <h2>Most clicked <span class="tag">(merge sort)</span></h2>
+      <table><thead><tr><th>Code</th><th>Clicks</th></tr></thead><tbody id="top"></tbody></table>
+    </section>
+    <section>
+      <h2>Recently created <span class="tag">(linked list)</span></h2>
+      <table><thead><tr><th>Code</th><th>Destination</th></tr></thead><tbody id="recent"></tbody></table>
+    </section>
+  </div>
+
+  <section>
+    <h2>Search codes by prefix <span class="tag">(trie)</span></h2>
+    <div class="row"><input id="prefix" placeholder="Start typing a code..."></div>
+    <div class="out" id="matches"></div>
+  </section>
+
+  <section>
+    <h2>System internals</h2>
+    <div class="row">
+      <button class="ghost" id="info">Cache and queue status</button>
+      <button class="ghost" id="bench">Run search benchmark</button>
+    </div>
+    <div class="out"><pre id="internals"></pre></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const api = async (path, opts) => { const r = await fetch(path, opts); return { ok: r.ok, data: await r.json() }; };
+
+function rows(tbody, items, cols) {
+  tbody.replaceChildren();
+  if (!items.length) { const tr = tbody.insertRow(); const td = tr.insertCell(); td.colSpan = cols.length; td.textContent = "No links yet. Shorten one above."; return; }
+  items.forEach(it => { const tr = tbody.insertRow(); cols.forEach(c => { const td = tr.insertCell(); if (c === "code") { const a = document.createElement("a"); a.href = it.short_url; a.target = "_blank"; a.rel = "noopener"; a.textContent = it.code; a.className = "mono"; td.append(a); } else td.textContent = it[c]; }); });
+}
+async function refresh() {
+  rows($("top"), (await api("/api/top")).data, ["code", "clicks"]);
+  rows($("recent"), (await api("/api/recent")).data, ["code", "long_url"]);
+}
+$("go").onclick = async () => {
+  const body = { url: $("url").value, alias: $("alias").value, ttl: $("ttl").value };
+  const { ok, data } = await api("/api/shorten", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const out = $("result"); out.replaceChildren();
+  if (!ok) { out.className = "out err"; out.textContent = data.error; return; }
+  out.className = "out";
+  const a = document.createElement("a"); a.href = data.short_url; a.target = "_blank"; a.rel = "noopener"; a.textContent = data.short_url;
+  out.append("Short link: ", a);
+  refresh();
+};
+$("undo").onclick = async () => {
+  const { ok, data } = await api("/api/undo", { method: "POST" });
+  const out = $("result"); out.className = ok ? "out" : "out err";
+  out.textContent = ok ? "Removed " + data.undone : data.error;
+  refresh();
+};
+$("prefix").oninput = async e => {
+  const { data } = await api("/api/search?prefix=" + encodeURIComponent(e.target.value));
+  $("matches").textContent = e.target.value ? (data.length ? data.join(", ") : "No matching codes") : "";
+};
+$("info").onclick = async () => { $("internals").textContent = JSON.stringify((await api("/api/info")).data, null, 2); };
+$("bench").onclick = async () => { $("internals").textContent = "Running..."; $("internals").textContent = JSON.stringify((await api("/api/benchmark")).data, null, 2); };
+refresh();
+</script>
+</body>
+</html>
